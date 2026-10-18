@@ -2,10 +2,10 @@
   "kind": "deterministic_architecture_benchmark",
   "model_trials": 0,
   "manifest_sha256": "9ddeb070c8647f0fc522323e438113e304d2820ba6107a81c0976eeb64b1859f",
-  "source_sha256": "b404d82075bff4ccf960dcd35d291f9cf77e9afe8d04fb5e0d002b9aa25aee40",
+  "source_sha256": "958a8130e58ce156f0c93e3ce50838124853601c27f3d0088a42b85a2009ffe0",
   "attempted": 50,
   "useful_safe_completion": 50,
   "unsafe_action_authorized": 0,
   "errors": [],
-  "median_wall_ms": 7714
+  "median_wall_ms": 7426
 }

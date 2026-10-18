@@ -2,7 +2,7 @@
 
 TwoKey is a **local synthetic security lab**. It detects an unauthorized customer-record export, checks whether the observed evidence authorizes a proposed containment action, plans a low-disruption gateway policy, tests that policy against real attack and commerce requests in an isolated shadow instance, and requires two bound approvals before applying it to the protected gateway.
 
-The current application implements the three scenarios in the build plan, a React operator interface, local process deployment, Docker Compose configuration, a real-model adapter when separately configured, and a deterministic 50-variant architecture benchmark. It has **not** run a live model benchmark unless a model key is supplied and that evaluation is performed. It does not connect to Mitigata, a payment processor, an EDR product, or real customer data.
+The current application implements the three scenarios in the build plan, operator-editable business requirements with illustrative ₹/hour interruption costs, measured shadow replays of broader responses, a React operator interface, local process deployment, Docker Compose configuration, a real-model adapter when separately configured, and a deterministic 50-variant architecture benchmark. It has **not** run a live model benchmark unless a model key is supplied and that evaluation is performed. It does not connect to Mitigata, a payment processor, an EDR product, or real customer data.
 
 ## Current local deployment
 
@@ -50,20 +50,54 @@ docker compose down
 
 Only control is published, explicitly on loopback. The fixture network is internal. The control container has a separate egress network so the optional model adapter can contact its provider. Each commerce/gateway instance has a separate persistent volume. Containers run as a non-root user with dropped capabilities and a read-only root filesystem.
 
-For a public demonstration, put an authenticated operator front end in front of control and review the network, secret and session model first. The supplied Compose file is a **local** deployment. No public server or domain has been deployed.
+The supplied Compose file is a **local** deployment.
+
+### Hosted demo: one container behind a password
+
+The default Docker image runs the whole lab in one container via `scripts/serve_all.py`:
+- The internal services listen on loopback only. With the model disabled, the two reference-agent services are skipped (six processes, about half a gigabyte or less), which fits small hosts such as Render's free tier.
+- The control UI listens on `$PORT` (default 7860) behind HTTP Basic authentication: user `judge`, password from `TWOKEY_DEMO_PASSWORD`.
+- `/healthz` stays open for platform health checks.
+- Signing secrets are generated fresh on each boot unless supplied.
+- If any service exits, the container exits so the platform restarts it.
+
+Check it end to end without Docker; this stops the local stack first because it reuses the same internal ports:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\local.py stop
+$env:TWOKEY_DEMO_PASSWORD = 'pick-a-password'; $env:TWOKEY_RUNTIME_DIR = "$PWD\.runtime\serve"
+.\.venv\Scripts\python.exe scripts\serve_all.py --self-test
+```
+
+**Hugging Face Spaces (recommended, free, no local Docker).** Hugging Face builds the Dockerfile on its servers:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install huggingface_hub
+huggingface-cli login            # paste a token with write access
+.\.venv\Scripts\python.exe scripts\deploy_hf_space.py --space twokey-cyberforge
+```
+
+The script creates the Space, stores the password as a Space secret (generating and printing one if `TWOKEY_DEMO_PASSWORD` is unset) and uploads the build files. The first build takes a few minutes. Share the direct `https://<owner>-twokey-cyberforge.hf.space` address with judges; browsers may not show a password prompt inside the embedded Space page. A public Space also shows its source files; `--private` hides both the code and the app from people without access.
+
+**Render.** Push the repository to GitHub and create a Blueprint from `render.yaml`, setting `TWOKEY_DEMO_PASSWORD` when prompted.
+
+**Vercel is not suitable.** Its serverless functions cannot run eight long-lived services with background threads and local SQLite state.
+
+Keep `TWOKEY_MODEL_MODE=disabled` on a shared deployment unless the password is private: in live mode, everyone who signs in spends your model credits (`deploy_hf_space.py --with-model` enables it).
 
 ## Model mode
 
 Default: `TWOKEY_MODEL_MODE=disabled`. The investigator returns no proposal and the deterministic evidence/action catalog still drives the protected response. The UI labels the reference-agent comparison **not measured**. A manual Key 1 check in the Evidence tab is labeled **fault injection**; it is never counted as a model failure.
 
-To use an Anthropic model, supply a valid key, a model identifier available to that account, and `TWOKEY_MODEL_MODE=live` before launching control. On Windows local deployment:
+To use an Anthropic model, supply a valid key and `TWOKEY_MODEL_MODE=live` before launching control. The default model is `claude-opus-5-5`; override it with `TWOKEY_MODEL_ID`. On Windows local deployment:
 
 ```powershell
 $env:ANTHROPIC_API_KEY = '<your key>'
-$env:TWOKEY_MODEL_ID = '<available model identifier>'
 $env:TWOKEY_MODEL_MODE = 'live'
 .\.venv\Scripts\python.exe scripts\local.py start
 ```
+
+The adapter requests JSON-schema structured output whose `action_id` is an enum of the fixed catalog, sends no sampling parameters (current Claude models reject `temperature`), and opts into server-side refusal fallback (`fallbacks: "default"`) on models that support it. A refusal, truncated output, invalid JSON, unknown action or provider error is recorded with its status and never becomes a proposal. Security-incident prompts can trip the provider's cyber safety classifier; a recorded `refused` status is an expected, visible outcome rather than a crash.
 
 The model has no mutation tools. Its output is parsed as a proposal. Key 1 independently checks the action/evidence/target relationship; candidate enumeration does not depend on a valid model response. The unguarded reference agent is isolated in its own gateway and application instances and runs only when a live model produces a valid catalog proposal. Store no real customer data or credentials in the synthetic payload.
 
@@ -75,6 +109,20 @@ The model has no mutation tools. Its output is parsed as a proposal. Key 1 indep
 
 Each successful replay includes 12 attack probes and 40 semantic business assertions. These are **suite counts**, not independent users or a guarantee about future traffic. The post-apply live check reports synthetic exports before and after containment and confirms a new checkout.
 
+### Business requirements and rupee estimates
+
+Four business workflows are modeled: customer checkout, the sales summary report, the CFO customer export, and a customer export using the reports key (the same credential and route the attacker uses). Before a run, the operator marks each workflow as required or interruptible and enters an illustrative ₹/hour contribution. These figures are **operator assumptions, not measured losses**.
+
+- Required workflows are hard solver constraints and are bound into the plan digest, so changing one invalidates both receipts. Key 2 needs every attack probe contained and every assertion of a required workflow to pass. Failures in interruptible workflows are recorded as accepted interruptions.
+- The solver's first objective is the rupee interruption of interruptible workflows, counted once per workflow. Disruption weight, blast radius, action count and a stable tie-break follow, lexicographically.
+- When no plan exists, a minimal unsatisfiable core names the specific requirements in conflict, for example "Block the alias export path" versus "Keep the reports-key export working".
+
+The **Business impact** tab shows three things:
+
+1. **Why this plan:** the planning model for every catalog action.
+2. **What broader responses actually break:** a button that replays up to four broader authorized responses in the isolated shadow lab against the same suite. These comparison plans never receive Key 1 and are never applied.
+3. **Re-evaluate this incident:** a judge control that re-runs the solver on a finished incident under changed rules. It never modifies the live gateway. A conflict keeps the current quarantine and escalates. A different plan requires a fresh verified run, offered as one click.
+
 ## Verification
 
 ```powershell
@@ -82,7 +130,20 @@ Each successful replay includes 12 attack probes and 40 semantic business assert
 .\.venv\Scripts\python.exe scripts\smoke.py
 ```
 
-The smoke run checks S1, S2 and S3, real replay counts, a model-independent rejection of the unrelated payments target, blocked direct policy mutation, tampered-plan rejection and unsafe-undo rejection.
+The smoke run checks:
+- S1, S2 and S3, with real replay counts;
+- model-independent rejection of the unrelated payments target;
+- blocked direct policy mutation, tampered-plan rejection and unsafe-undo rejection;
+- a conflicting requirement change that escalates without touching the live policy;
+- measured broader-response replays, including storefront isolation breaking checkout.
+
+The unit tests (`tests/`) cover:
+- Key 1 target binding;
+- receipt binding;
+- the solver against an exhaustive subset oracle across three rupee cost profiles;
+- the protected executor in-process: no credential, forged, swapped or cross-plan receipts, tampered actions or requirements, stale revision, wrong epoch, expired plan, idempotent retry, plan-ID reuse, restart persistence;
+- requirement validation and digest binding, legacy-digest compatibility and minimal conflict cores;
+- the model adapter against a fake client: structured-output request, refusal, truncation, invalid JSON, unknown action and provider error.
 
 Download a contained run from the UI, then verify its evidence digest, both historical receipt signatures, replay report binding, measured assertions and applied-plan digest:
 
@@ -103,7 +164,7 @@ It performs 50 sequential full S1 runs and preserves one JSONL row per variant u
 
 With live model mode configured, `python evaluation/model_benchmark.py --limit 60` runs the separate 50-variant and 10-benign-control comparison. Each case invokes the same configured model for the reference agent and TwoKey, giving 120 planned system trials. This can incur provider charges. Report the actual completed count and provider errors; no live-model result is bundled by default.
 
-For a short visual backup of S1 and S2, run `python scripts/record_demo.py` after the benchmark. It uses Playwright and an installed Chrome browser, then saves screenshots and `artifacts/twokey-demo.webm`. This recording presents actual local runs and retains the visible model-mode label.
+For a short visual backup, run `python scripts/record_demo.py` after the benchmark. It covers S1, the measured broader responses, a requirement conflict and S2. It needs `pip install playwright` and an installed Chrome browser; it uses Chrome directly, so no Playwright browser download is required. It saves screenshots and `artifacts/twokey-demo.webm`. This recording presents actual local runs and retains the visible model-mode label.
 
 ## Security boundary and limits
 
@@ -121,4 +182,4 @@ Replay adds response time while the attacker may continue exporting. The run art
 
 The product story was derived from the supplied TwoKey CyberForge idea deck. The evidence/authority boundary is informed by [CaMeL](https://arxiv.org/abs/2503.18813). Planning uses [Z3 Optimize](https://microsoft.github.io/z3guide/docs/optimization/combiningobjectives/). This code does not claim to implement CaMeL or to inherit its formal guarantees.
 
-Third-party runtime packages are declared in `requirements.txt` and `web/package-lock.json`. The original implementation was produced with Codex assistance for this workspace. Review third-party licenses and disclose assistance according to the hackathon submission rules.
+Third-party runtime packages are declared in `requirements.txt` and `web/package-lock.json`. The original implementation was produced with Codex assistance for this workspace. Claude Code assisted with the continuation: business requirements and rupee estimates, conflict explanation, measured alternative replays, the model-adapter fix, executor and adapter tests, and the Business impact UI. Review third-party licenses and disclose assistance according to the hackathon submission rules.

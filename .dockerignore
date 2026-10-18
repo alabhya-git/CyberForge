@@ -1,0 +1,12 @@
+.venv/
+.runtime/
+.tools/
+.git/
+.pytest_cache/
+**/__pycache__/
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+artifacts/
+tmp/
+.env

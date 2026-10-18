@@ -50,6 +50,25 @@ def main():
         assert unsafe_undo.status_code == 409
         print("Boundary: unrelated target, direct policy write, altered plan and unsafe undo rejected")
 
+        revision = client.get(BASE + "/api/state").json()["gateway"]["revision"]
+        changed = client.post(BASE + f"/api/runs/{s1['id']}/requirements", json={"required_workflows": ["cfo_export", "checkout", "compromised_export", "summary"]}).json()
+        assert changed["outcome"] == "conflict" and any(c["id"] == "compromised_export" for c in changed["conflict"])
+        assert client.get(BASE + "/api/state").json()["gateway"]["revision"] == revision
+        print("Requirements: conflicting business rule escalated with a minimal explanation; live policy untouched")
+
+        assert client.post(BASE + f"/api/runs/{s1['id']}/compare").status_code == 200
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            comparisons = client.get(BASE + "/api/runs/" + s1["id"]).json().get("comparisons", {})
+            if comparisons.get("status") in {"complete", "error"}:
+                break
+            time.sleep(.5)
+        assert comparisons.get("status") == "complete", comparisons
+        storefront = next(x for x in comparisons["items"] if x["action_id"] == "disable_storefront")
+        assert storefront["attack_contained"] == 12 and "checkout" in storefront["workflows_failed"] and not storefront["would_pass_key2"]
+        assert client.get(BASE + "/api/state").json()["gateway"]["revision"] == revision
+        print(f"Alternatives: isolating the storefront stops 12/12 probes but passes {storefront['business_passed']}/40 business assertions (measured, never applied)")
+
         s2 = run_scenario(client, "s2")
         assert s2["status"] == "contained", s2.get("reason")
         assert len(s2["replays"]) == 2 and not s2["replays"][0]["passed"] and s2["replays"][1]["passed"]

@@ -1,7 +1,7 @@
 import time
 from itertools import combinations
 
-from twokey.core import ACTIONS, CATALOG_ORDER, CONFIG_EPOCH, Plan, Receipt, authorize_action, sign_receipt, solve_plan, verify_receipt
+from twokey.core import ACTIONS, CATALOG_ORDER, CONFIG_EPOCH, WORKFLOWS, Plan, Receipt, authorize_action, interruption_inr, sign_receipt, solve_plan, verify_receipt
 
 
 EVIDENCE = {
@@ -49,18 +49,27 @@ def test_both_receipts_bind_the_complete_plan():
 
 def test_solver_matches_independent_subset_oracle():
     ids = list(CATALOG_ORDER)
+    cost_profiles = [
+        {w.id: w.default_inr_per_hour for w in WORKFLOWS.values()},
+        {"checkout": 30000, "summary": 9000, "cfo_export": 100, "compromised_export": 0},
+        {"checkout": 0, "summary": 0, "cfo_export": 0, "compromised_export": 0},
+    ]
     for traces in ({"primary"}, {"primary", "alias"}):
-        for required in ({"checkout", "summary"}, {"checkout", "summary", "cfo_export"}, {"checkout", "summary", "cfo_export", "compromised_export"}):
-            candidates = []
-            for size in range(1, len(ids) + 1):
-                for combo in combinations(ids, size):
-                    if all(any(t in ACTIONS[a].modeled_attacks for a in combo) for t in traces) and all(not (ACTIONS[a].breaks & required) for a in combo):
-                        candidates.append(combo)
-            solved = solve_plan(ids, traces, required)
-            if not candidates:
-                assert solved["status"] == "unsat"
-            else:
+        for required in ({"checkout"}, {"checkout", "summary"}, {"checkout", "summary", "cfo_export"}, {"checkout", "summary", "cfo_export", "compromised_export"}):
+            for costs in cost_profiles:
+                candidates = []
+                for size in range(1, len(ids) + 1):
+                    for combo in combinations(ids, size):
+                        if all(any(t in ACTIONS[a].modeled_attacks for a in combo) for t in traces) and all(not (ACTIONS[a].breaks & required) for a in combo):
+                            candidates.append(combo)
+                solved = solve_plan(ids, traces, required, costs=costs)
+                if not candidates:
+                    assert solved["status"] == "unsat"
+                    continue
                 assert solved["status"] == "sat"
-                expected = min((sum(ACTIONS[a].disruption for a in combo), sum(ACTIONS[a].blast_radius for a in combo), len(combo)) for combo in candidates)
-                actual = (solved["disruption"], solved["blast_radius"], len(solved["actions"]))
-                assert actual == expected
+                # Lexicographic: rupee interruption (per workflow, no double counting), then
+                # disruption, blast radius and action count.
+                key = lambda combo: (interruption_inr(combo, required, costs), sum(ACTIONS[a].disruption for a in combo), sum(ACTIONS[a].blast_radius for a in combo), len(combo))
+                expected = min(key(combo) for combo in candidates)
+                assert key(solved["actions"]) == expected
+                assert solved["estimated_inr_per_hour"] == expected[0]

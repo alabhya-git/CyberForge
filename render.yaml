@@ -1,0 +1,16 @@
+# Render blueprint: the whole TwoKey lab in one Docker web service.
+# Push the repository to GitHub, then Render > New > Blueprint, and set
+# TWOKEY_DEMO_PASSWORD when prompted. Free instances sleep when idle (cold start ~1 min).
+services:
+  - type: web
+    name: twokey
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: TWOKEY_DEMO_PASSWORD
+        sync: false
+      - key: TWOKEY_MODEL_MODE
+        value: disabled
+      - key: TWOKEY_RUNTIME_DIR
+        value: /tmp/twokey-runtime

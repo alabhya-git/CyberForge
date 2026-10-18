@@ -95,7 +95,7 @@ services:
       TWOKEY_VERIFIER: http://verifier:8300
       TWOKEY_KEY1_SECRET: ${TWOKEY_KEY1_SECRET:?Set a distinct Key 1 secret}
       TWOKEY_MODEL_MODE: ${TWOKEY_MODEL_MODE:-disabled}
-      TWOKEY_MODEL_ID: ${TWOKEY_MODEL_ID:-claude-sonnet-4-5}
+      TWOKEY_MODEL_ID: ${TWOKEY_MODEL_ID:-claude-opus-5-5}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes: [control-data:/runtime]
     depends_on:

@@ -11,8 +11,13 @@ ENV PYTHONUNBUFFERED=1
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY twokey/ ./twokey/
+COPY scripts/serve_all.py ./scripts/serve_all.py
 COPY --from=web /app/web/dist ./web/dist/
-RUN useradd --system --user-group twokey && mkdir /runtime && chown twokey:twokey /runtime
+# UID 1000 matches Hugging Face Spaces; Compose and other hosts accept it too.
+RUN useradd --create-home --uid 1000 twokey && mkdir /runtime && chown twokey:twokey /runtime
 USER twokey
-ENV TWOKEY_RUNTIME_DIR=/runtime
-CMD ["python", "-m", "uvicorn", "twokey.control:app", "--host", "0.0.0.0", "--port", "8100"]
+ENV TWOKEY_RUNTIME_DIR=/runtime PORT=7860
+EXPOSE 7860
+# Default: the whole lab in one container behind the demo password (scripts/serve_all.py).
+# compose.yaml overrides the command to run each service in its own container.
+CMD ["python", "scripts/serve_all.py"]

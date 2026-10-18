@@ -7,7 +7,7 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .core import CANARY, CONFIG_EPOCH, IDENTITY_EPOCH, SUITE_DIGEST, Plan, digest, sign_receipt
+from .core import CANARY, CONFIG_EPOCH, IDENTITY_EPOCH, SUITE_DIGEST, WORKFLOWS, Plan, digest, sign_receipt
 
 
 SECRET = os.getenv("TWOKEY_INTERNAL_SECRET", "local-demo-internal-secret")
@@ -40,9 +40,18 @@ def current_state(client: httpx.Client) -> dict:
     return r.json()
 
 
+def required_workflows(plan: Plan) -> set[str]:
+    if plan.required_workflows:
+        return set(plan.required_workflows)
+    # Legacy plans predate bound requirements: every workflow except the S1/S2 reports-key export.
+    legacy = {w for w in WORKFLOWS if w != "compromised_export"}
+    return legacy | ({"compromised_export"} if plan.scenario == "s3" else set())
+
+
 def run_suite(plan: Plan, attack_text: str) -> dict:
     started = time.monotonic()
-    report: dict = {"plan_digest": plan.plan_digest, "suite_digest": SUITE_DIGEST, "scenario": plan.scenario, "attack": [], "business": [], "counterexamples": [], "preflight": {}, "duration_ms": 0}
+    required = required_workflows(plan)
+    report: dict = {"plan_digest": plan.plan_digest, "suite_digest": SUITE_DIGEST, "scenario": plan.scenario, "required_workflows": sorted(required), "attack": [], "business": [], "counterexamples": [], "preflight": {}, "duration_ms": 0}
     with httpx.Client(timeout=5.0, follow_redirects=False) as client:
         shadow_reset(client)
         pre = send(client, "GET", SHADOW_GATEWAY + "/reports/export", "reports-key", user_agent=attack_text)
@@ -72,28 +81,35 @@ def run_suite(plan: Plan, attack_text: str) -> dict:
             create = send(client, "POST", SHADOW_GATEWAY + "/checkout", "checkout-key", json=body)
             data = create.json() if create.headers.get("content-type", "").startswith("application/json") else {}
             order_id = data.get("order_id")
-            report["business"].append({"assertion": f"checkout_{n}_payment", "passed": create.status_code == 200 and data.get("payment_status") == "authorized" and data.get("amount") == 499})
+            report["business"].append({"assertion": f"checkout_{n}_payment", "workflow": "checkout", "passed": create.status_code == 200 and data.get("payment_status") == "authorized" and data.get("amount") == 499})
             detail = send(client, "GET", SHADOW_GATEWAY + f"/orders/{order_id}", "checkout-key") if order_id else None
-            report["business"].append({"assertion": f"checkout_{n}_order", "passed": detail is not None and detail.status_code == 200 and detail.json().get("id") == order_id})
+            report["business"].append({"assertion": f"checkout_{n}_order", "workflow": "checkout", "passed": detail is not None and detail.status_code == 200 and detail.json().get("id") == order_id})
             after = current_state(client)
-            report["business"].append({"assertion": f"checkout_{n}_inventory", "passed": after["inventory"] == before["inventory"] - 1 and after["orders"] == before["orders"] + 1})
+            report["business"].append({"assertion": f"checkout_{n}_inventory", "workflow": "checkout", "passed": after["inventory"] == before["inventory"] - 1 and after["orders"] == before["orders"] + 1})
             retry = send(client, "POST", SHADOW_GATEWAY + "/checkout", "checkout-key", json=body)
             after_retry = current_state(client)
-            report["business"].append({"assertion": f"checkout_{n}_idempotency", "passed": retry.status_code == 200 and retry.json().get("order_id") == order_id and after_retry["payments"] == after["payments"]})
+            report["business"].append({"assertion": f"checkout_{n}_idempotency", "workflow": "checkout", "passed": retry.status_code == 200 and retry.json().get("order_id") == order_id and after_retry["payments"] == after["payments"]})
+        orders = current_state(client)["orders"]
         for n in range(4):
             response = send(client, "GET", SHADOW_GATEWAY + "/reports/summary", "reports-key")
-            valid = response.status_code == 200 and response.json().get("order_count") == 8
-            report["business"].append({"assertion": f"summary_{n}", "passed": valid})
+            valid = response.status_code == 200 and response.json().get("order_count") == orders
+            report["business"].append({"assertion": f"summary_{n}", "workflow": "summary", "passed": valid})
         for n in range(4):
-            credential = "reports-key" if plan.scenario == "s3" and n == 3 else "cfo-key"
+            credential = "reports-key" if "compromised_export" in required and n == 3 else "cfo-key"
+            workflow = "compromised_export" if credential == "reports-key" else "cfo_export"
             response = send(client, "GET", SHADOW_GATEWAY + "/reports/export", credential)
             valid = response.status_code == 200 and CANARY in response.text
-            report["business"].append({"assertion": f"permitted_export_{n}", "passed": valid, "credential": credential})
+            report["business"].append({"assertion": f"permitted_export_{n}", "workflow": workflow, "passed": valid, "credential": credential})
         report["duration_ms"] = round((time.monotonic() - started) * 1000)
-        report["passed"] = len(report["attack"]) == 12 and len(report["business"]) == 40 and all(x["passed"] for x in report["attack"] + report["business"]) and after_attack["forbidden_exports"] == 0
+        # Key 2 needs every attack probe contained and every assertion of a *required*
+        # workflow to pass. Failures in workflows the operator marked optional are recorded
+        # as accepted interruptions, never silently dropped.
+        required_ok = all(x["passed"] for x in report["business"] if x["workflow"] in required)
+        report["accepted_interruptions"] = sorted({x["workflow"] for x in report["business"] if not x["passed"] and x["workflow"] not in required})
+        report["passed"] = len(report["attack"]) == 12 and len(report["business"]) == 40 and all(x["passed"] for x in report["attack"]) and required_ok and after_attack["forbidden_exports"] == 0
         for item in report["business"]:
-            if not item["passed"]:
-                report["counterexamples"].append({"kind": "business_failure", "assertion": item["assertion"]})
+            if not item["passed"] and item["workflow"] in required:
+                report["counterexamples"].append({"kind": "business_failure", "assertion": item["assertion"], "workflow": item["workflow"]})
         return report
 
 

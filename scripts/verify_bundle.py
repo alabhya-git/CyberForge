@@ -48,8 +48,13 @@ def verify(path: Path) -> list[str]:
             errors.append("Key 2 historical signature invalid")
         if len(report.get("attack", [])) != 12 or not all(x.get("passed") for x in report["attack"]):
             errors.append("attack replay did not fully pass")
-        if len(report.get("business", [])) != 40 or not all(x.get("passed") for x in report["business"]):
-            errors.append("business replay did not fully pass")
+        # Same rule as Key 2: every assertion of a workflow the plan bound as required must pass.
+        # Legacy plans (no bound requirements, no per-assertion workflow) require all assertions.
+        required = set(plan.required_workflows)
+        business = report.get("business", [])
+        must_pass = [x for x in business if not required or "workflow" not in x or x["workflow"] in required]
+        if len(business) != 40 or not all(x.get("passed") for x in must_pass):
+            errors.append("business replay did not pass every required workflow")
         post = run.get("post_apply") or {}
         if not post.get("export_blocked") or not post.get("checkout_worked"):
             errors.append("post-apply live checks did not both pass")
