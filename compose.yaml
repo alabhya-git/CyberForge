@@ -1,0 +1,119 @@
+name: twokey
+
+x-common: &common
+  build: .
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp]
+  networks: [lab]
+  healthcheck:
+    test: [CMD, python, -c, "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ['TWOKEY_PORT']+'/healthz',timeout=2)"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 10s
+
+x-internal-env: &internal-env
+  TWOKEY_INTERNAL_SECRET: ${TWOKEY_INTERNAL_SECRET:?Copy .env.example to .env and set a secret}
+  TWOKEY_RUNTIME_DIR: /runtime
+
+services:
+  commerce-live:
+    <<: *common
+    command: [python, -m, uvicorn, twokey.commerce:app, --host, 0.0.0.0, --port, "8201"]
+    environment: { <<: *internal-env, TWOKEY_ROLE: live, TWOKEY_PORT: "8201" }
+    volumes: [commerce-live-data:/runtime]
+
+  commerce-shadow:
+    <<: *common
+    command: [python, -m, uvicorn, twokey.commerce:app, --host, 0.0.0.0, --port, "8202"]
+    environment: { <<: *internal-env, TWOKEY_ROLE: shadow, TWOKEY_PORT: "8202" }
+    volumes: [commerce-shadow-data:/runtime]
+
+  commerce-baseline:
+    <<: *common
+    command: [python, -m, uvicorn, twokey.commerce:app, --host, 0.0.0.0, --port, "8203"]
+    environment: { <<: *internal-env, TWOKEY_ROLE: baseline, TWOKEY_PORT: "8203" }
+    volumes: [commerce-baseline-data:/runtime]
+
+  gateway-live:
+    <<: *common
+    command: [python, -m, uvicorn, twokey.gateway:app, --host, 0.0.0.0, --port, "8101"]
+    environment:
+      <<: *internal-env
+      TWOKEY_ROLE: live
+      TWOKEY_PORT: "8101"
+      TWOKEY_COMMERCE_URL: http://commerce-live:8201
+      TWOKEY_KEY1_SECRET: ${TWOKEY_KEY1_SECRET:?Set a distinct Key 1 secret}
+      TWOKEY_KEY2_SECRET: ${TWOKEY_KEY2_SECRET:?Set a distinct Key 2 secret}
+    volumes: [gateway-live-data:/runtime]
+    depends_on: { commerce-live: { condition: service_healthy } }
+
+  gateway-shadow:
+    <<: *common
+    command: [python, -m, uvicorn, twokey.gateway:app, --host, 0.0.0.0, --port, "8102"]
+    environment: { <<: *internal-env, TWOKEY_ROLE: shadow, TWOKEY_PORT: "8102", TWOKEY_COMMERCE_URL: "http://commerce-shadow:8202" }
+    volumes: [gateway-shadow-data:/runtime]
+    depends_on: { commerce-shadow: { condition: service_healthy } }
+
+  gateway-baseline:
+    <<: *common
+    command: [python, -m, uvicorn, twokey.gateway:app, --host, 0.0.0.0, --port, "8103"]
+    environment: { <<: *internal-env, TWOKEY_ROLE: baseline, TWOKEY_PORT: "8103", TWOKEY_COMMERCE_URL: "http://commerce-baseline:8203" }
+    volumes: [gateway-baseline-data:/runtime]
+    depends_on: { commerce-baseline: { condition: service_healthy } }
+
+  verifier:
+    <<: *common
+    command: [python, -m, uvicorn, twokey.verifier:app, --host, 0.0.0.0, --port, "8300"]
+    environment:
+      <<: *internal-env
+      TWOKEY_ROLE: verifier
+      TWOKEY_PORT: "8300"
+      TWOKEY_SHADOW_GATEWAY: http://gateway-shadow:8102
+      TWOKEY_SHADOW_COMMERCE: http://commerce-shadow:8202
+      TWOKEY_KEY2_SECRET: ${TWOKEY_KEY2_SECRET:?Set a distinct Key 2 secret}
+    depends_on: { gateway-shadow: { condition: service_healthy } }
+
+  control:
+    <<: *common
+    command: [python, -m, uvicorn, twokey.control:app, --host, 0.0.0.0, --port, "8100"]
+    networks: [lab, egress]
+    ports: ["127.0.0.1:8100:8100"]
+    environment:
+      <<: *internal-env
+      TWOKEY_ROLE: control
+      TWOKEY_PORT: "8100"
+      TWOKEY_LIVE_GATEWAY: http://gateway-live:8101
+      TWOKEY_SHADOW_GATEWAY: http://gateway-shadow:8102
+      TWOKEY_BASELINE_GATEWAY: http://gateway-baseline:8103
+      TWOKEY_LIVE_COMMERCE: http://commerce-live:8201
+      TWOKEY_SHADOW_COMMERCE: http://commerce-shadow:8202
+      TWOKEY_BASELINE_COMMERCE: http://commerce-baseline:8203
+      TWOKEY_VERIFIER: http://verifier:8300
+      TWOKEY_KEY1_SECRET: ${TWOKEY_KEY1_SECRET:?Set a distinct Key 1 secret}
+      TWOKEY_MODEL_MODE: ${TWOKEY_MODEL_MODE:-disabled}
+      TWOKEY_MODEL_ID: ${TWOKEY_MODEL_ID:-claude-sonnet-4-5}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes: [control-data:/runtime]
+    depends_on:
+      gateway-live: { condition: service_healthy }
+      gateway-shadow: { condition: service_healthy }
+      gateway-baseline: { condition: service_healthy }
+      verifier: { condition: service_healthy }
+
+networks:
+  lab:
+    internal: true
+  egress: {}
+
+volumes:
+  commerce-live-data: {}
+  commerce-shadow-data: {}
+  commerce-baseline-data: {}
+  gateway-live-data: {}
+  gateway-shadow-data: {}
+  gateway-baseline-data: {}
+  control-data: {}
